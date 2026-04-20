@@ -8,7 +8,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -24,7 +23,7 @@ struct AppState {
 const DASHBOARD_HTML: &str = include_str!("../dashboard/index.html");
 
 pub async fn run(
-    bind: SocketAddr,
+    listener: tokio::net::TcpListener,
     approvals: Arc<Approvals>,
     receipts_path: PathBuf,
 ) -> anyhow::Result<()> {
@@ -42,11 +41,6 @@ pub async fn run(
         .route("/api/records", get(list_records))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(bind).await?;
-    eprintln!(
-        "[deos-mcpd] control + dashboard listening on http://{}",
-        bind
-    );
     axum::serve(listener, app).await?;
     Ok(())
 }

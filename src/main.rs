@@ -78,10 +78,21 @@ async fn main() -> Result<()> {
             .control
             .parse()
             .with_context(|| format!("invalid --control address {:?}", args.control))?;
+        let listener = tokio::net::TcpListener::bind(bind).await.with_context(|| {
+            format!(
+                "failed to bind control API on {} — another deos-mcpd instance is probably \
+                 already listening; pass --control 127.0.0.1:<free-port> or --control off",
+                bind
+            )
+        })?;
+        eprintln!(
+            "[deos-mcpd] control + dashboard listening on http://{}",
+            bind
+        );
         let approvals_clone = approvals.clone();
         let receipts_clone = receipts_path.clone();
         tokio::spawn(async move {
-            if let Err(e) = control::run(bind, approvals_clone, receipts_clone).await {
+            if let Err(e) = control::run(listener, approvals_clone, receipts_clone).await {
                 eprintln!("[deos-mcpd] control server error: {}", e);
             }
         });

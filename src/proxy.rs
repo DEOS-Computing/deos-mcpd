@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
+use tokio::task::JoinHandle;
 
 use crate::approval::{Approvals, Decision, Pending};
 use crate::jsonrpc;
@@ -48,6 +49,7 @@ pub async fn run(cfg: ProxyConfig) -> Result<()> {
     let child_stdout = child.stdout.take().context("no stdout on upstream")?;
 
     let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+    let approval_tasks: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
 
     // Dedicated writer tasks: single owner of client stdout and upstream stdin.
     let (client_tx, mut client_rx) = mpsc::channel::<Vec<u8>>(256);
@@ -144,6 +146,7 @@ pub async fn run(cfg: ProxyConfig) -> Result<()> {
     let upstream_a = cfg.upstream.clone();
     let policy_a = cfg.policy.clone();
     let approvals_a = cfg.approvals.clone();
+    let approval_tasks_a = approval_tasks.clone();
     let client_tx_a = client_tx.clone();
     let upstream_tx_a = upstream_tx.clone();
     let task_in = tokio::spawn(async move {
@@ -288,7 +291,8 @@ pub async fn run(cfg: ProxyConfig) -> Result<()> {
                                     let req_id_c = req_id.clone();
                                     let rule_id_c = rule_id.clone();
 
-                                    tokio::spawn(async move {
+                                    let approval_tasks_clone = approval_tasks_a.clone();
+                                    let handle = tokio::spawn(async move {
                                         let outcome =
                                             match tokio::time::timeout(timeout, rx).await {
                                                 Ok(Ok(d)) => d,
@@ -392,6 +396,7 @@ pub async fn run(cfg: ProxyConfig) -> Result<()> {
                                             }
                                         }
                                     });
+                                    approval_tasks_clone.lock().await.push(handle);
                                 }
                             }
                         }
@@ -409,10 +414,34 @@ pub async fn run(cfg: ProxyConfig) -> Result<()> {
         drop(upstream_tx_a);
     });
 
-    let _ = tokio::join!(task_in, task_out);
-    drop(client_tx);
+    // Wait for stdin EOF (normal Claude Desktop disconnect). Don't wait on
+    // task_out here — the upstream MCP server keeps stdout open until *its*
+    // stdin closes, which only happens after we drop the upstream_tx sender.
+    let _ = task_in.await;
+
+    // Drain pending approvals as denied so the audit trail never has a
+    // dangling approval_requested. Waiter tasks see Decision::Denied on
+    // their rx and emit ApprovalResolved + Denial via writer_c.
+    let drained = cfg.approvals.shutdown_drain().await;
+    if !drained.is_empty() {
+        eprintln!(
+            "[deos-mcpd] shutdown: denying {} pending approval(s)",
+            drained.len()
+        );
+    }
+    let handles: Vec<_> = approval_tasks.lock().await.drain(..).collect();
+    for h in handles {
+        let _ = h.await;
+    }
+
+    // Signal upstream writer → closes child stdin → upstream exits → task_out EOFs.
     drop(upstream_tx);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), task_out).await;
+
+    drop(client_tx);
     let _ = tokio::join!(client_writer, upstream_writer);
+    // Drop the writer sender so the receipts writer task flushes + exits.
+    drop(writer);
     let status = child.wait().await?;
     if !status.success() {
         eprintln!("[deos-mcpd] upstream exited: {:?}", status);

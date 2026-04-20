@@ -73,4 +73,18 @@ impl Approvals {
     pub async fn purge(&self, id: &str) {
         self.inner.lock().await.remove(id);
     }
+
+    /// Drain all pending approvals, sending Denied to each waiter. Returns
+    /// the drained Pending descriptors so the caller can log denials.
+    /// Used on graceful shutdown — the spawned approval-waiter tasks see
+    /// Decision::Denied on their rx and emit their own resolution records.
+    pub async fn shutdown_drain(&self) -> Vec<Pending> {
+        let mut map = self.inner.lock().await;
+        let drained: Vec<Waiter> = map.drain().map(|(_, v)| v).collect();
+        let infos: Vec<Pending> = drained.iter().map(|w| w.info.clone()).collect();
+        for w in drained {
+            let _ = w.sender.send(Decision::Denied);
+        }
+        infos
+    }
 }
