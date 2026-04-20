@@ -79,8 +79,9 @@ async fn main() -> Result<()> {
             .parse()
             .with_context(|| format!("invalid --control address {:?}", args.control))?;
         let approvals_clone = approvals.clone();
+        let receipts_clone = receipts_path.clone();
         tokio::spawn(async move {
-            if let Err(e) = control::run(bind, approvals_clone).await {
+            if let Err(e) = control::run(bind, approvals_clone, receipts_clone).await {
                 eprintln!("[deos-mcpd] control server error: {}", e);
             }
         });

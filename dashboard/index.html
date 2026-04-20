@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>deos-mcpd dashboard</title>
+  <style>
+    :root {
+      --bg: #0b0d10;
+      --panel: #11151a;
+      --panel-alt: #161b22;
+      --border: #1f2630;
+      --text: #d7dde5;
+      --dim: #7d8796;
+      --accent: #65d1ff;
+      --ok: #7ee787;
+      --deny: #ff7b72;
+      --pending: #f0b72f;
+      --approved: #7ee787;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    header .title { font-weight: 600; letter-spacing: 0.3px; }
+    header .meta { color: var(--dim); }
+    header .spacer { flex: 1; }
+    header .badge {
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: #2a1d0c;
+      color: var(--pending);
+      border: 1px solid #3a2a14;
+    }
+    header .badge.zero { color: var(--dim); background: var(--panel-alt); border-color: var(--border); }
+
+    main {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      height: calc(100vh - 42px);
+    }
+    aside {
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+      background: var(--panel);
+    }
+    section { overflow-y: auto; padding: 0; }
+
+    .section-title {
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.8px;
+      color: var(--dim);
+      padding: 12px 14px 6px;
+    }
+
+    .row {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .row:hover { background: var(--panel-alt); }
+    .row.active { background: var(--panel-alt); border-left: 2px solid var(--accent); }
+    .row .sid { color: var(--text); font-weight: 600; }
+    .row .meta { color: var(--dim); font-size: 11px; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .counts { display: flex; gap: 10px; margin-top: 6px; font-size: 11px; }
+    .chip { padding: 1px 6px; border-radius: 4px; background: var(--panel-alt); color: var(--dim); }
+    .chip.ok { color: var(--ok); }
+    .chip.deny { color: var(--deny); }
+    .chip.pending { color: var(--pending); }
+
+    .pending-card {
+      margin: 10px 14px;
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #3a2a14;
+      background: #1c1409;
+    }
+    .pending-card .tool { color: var(--pending); font-weight: 600; }
+    .pending-card pre { font-size: 11px; margin: 6px 0; color: var(--dim); white-space: pre-wrap; word-break: break-all; }
+    .pending-card .actions { display: flex; gap: 6px; margin-top: 6px; }
+    button {
+      font: inherit;
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--panel-alt);
+      color: var(--text);
+      cursor: pointer;
+    }
+    button.primary { background: #1c3a1f; border-color: #2e5a33; color: var(--ok); }
+    button.danger { background: #3a1c1f; border-color: #5a2e33; color: var(--deny); }
+    button:hover { filter: brightness(1.2); }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { font-weight: 600; color: var(--dim); text-transform: uppercase; font-size: 10px; letter-spacing: 0.8px; background: var(--panel); position: sticky; top: 0; }
+    td .kind {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    td .kind.permit { background: #13281c; color: #7ee787; }
+    td .kind.receipt { background: #0e1f2d; color: #65d1ff; }
+    td .kind.denial { background: #2d1014; color: var(--deny); }
+    td .kind.approval_requested { background: #2a1d0c; color: var(--pending); }
+    td .kind.approval_resolved { background: #1a2212; color: var(--approved); }
+    td .hash { color: var(--dim); font-size: 11px; }
+    td .tool { color: var(--text); }
+    td .status.ok { color: var(--ok); }
+    td .status.error, td .status.tool_error { color: var(--deny); }
+    .empty { color: var(--dim); padding: 40px; text-align: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title">deos-mcpd</div>
+    <div class="meta" id="hdr-meta">loading…</div>
+    <div class="spacer"></div>
+    <div class="badge zero" id="hdr-pending" title="Pending approvals">0 pending</div>
+  </header>
+
+  <main>
+    <aside>
+      <div class="section-title">Pending approvals</div>
+      <div id="pending-list"><div class="empty" style="padding:14px">No pending approvals.</div></div>
+      <div class="section-title">Sessions</div>
+      <div id="session-list"><div class="empty" style="padding:14px">Waiting for receipts…</div></div>
+    </aside>
+
+    <section>
+      <table id="records">
+        <thead>
+          <tr>
+            <th>time</th>
+            <th>kind</th>
+            <th>tool</th>
+            <th>status / rule</th>
+            <th>id</th>
+          </tr>
+        </thead>
+        <tbody id="records-body">
+          <tr><td colspan="5" class="empty">Select a session, or wait for traffic…</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const state = { activeSession: null, sessions: [], records: [], pending: [] };
+
+    const fmt = (ms) => {
+      if (!ms) return '';
+      const d = new Date(ms);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    };
+    const fmtDur = (ms) => ms == null ? '' : (ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(2) + 's');
+    const short = (s, n = 10) => s ? s.slice(0, n) + '…' : '';
+
+    async function fetchJSON(url, opts) {
+      const r = await fetch(url, opts || {});
+      if (!r.ok) throw new Error(url + ': ' + r.status);
+      return r.json();
+    }
+
+    async function refresh() {
+      try {
+        const [sRes, pRes] = await Promise.all([
+          fetchJSON('/api/sessions'),
+          fetchJSON('/pending'),
+        ]);
+        state.sessions = sRes.sessions || [];
+        state.pending = pRes.pending || [];
+
+        const sessionFilter = state.activeSession
+          ? '?session=' + encodeURIComponent(state.activeSession)
+          : '';
+        const rRes = await fetchJSON('/api/records' + sessionFilter);
+        state.records = (rRes.records || []).slice().reverse();
+
+        render();
+      } catch (e) {
+        document.getElementById('hdr-meta').textContent = 'error: ' + e.message;
+      }
+    }
+
+    async function approve(id) {
+      await fetch('/approve/' + id, { method: 'POST' });
+      await refresh();
+    }
+    async function deny(id) {
+      await fetch('/deny/' + id, { method: 'POST' });
+      await refresh();
+    }
+
+    function render() {
+      renderHeader();
+      renderPending();
+      renderSessions();
+      renderRecords();
+    }
+
+    function renderHeader() {
+      const total = state.sessions.reduce((n, s) => n + s.records, 0);
+      document.getElementById('hdr-meta').textContent =
+        state.sessions.length + ' session(s), ' + total + ' record(s)';
+      const pb = document.getElementById('hdr-pending');
+      const count = state.pending.length;
+      pb.textContent = count + ' pending';
+      pb.classList.toggle('zero', count === 0);
+    }
+
+    function renderPending() {
+      const el = document.getElementById('pending-list');
+      if (!state.pending.length) {
+        el.innerHTML = '<div class="empty" style="padding:14px">No pending approvals.</div>';
+        return;
+      }
+      el.innerHTML = state.pending.map(p => `
+        <div class="pending-card">
+          <div class="tool">${escape(p.tool_name)}</div>
+          <div class="meta" style="color:var(--dim); font-size:11px; margin-top:2px">
+            rule ${escape(p.rule_id)} · req ${escape(p.request_id)} · ${fmt(p.created_ms)}
+          </div>
+          <pre>${escape(JSON.stringify(p.arguments, null, 2))}</pre>
+          <div class="actions">
+            <button class="primary" onclick="approve('${p.id}')">Approve</button>
+            <button class="danger" onclick="deny('${p.id}')">Deny</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderSessions() {
+      const el = document.getElementById('session-list');
+      if (!state.sessions.length) {
+        el.innerHTML = '<div class="empty" style="padding:14px">Waiting for receipts…</div>';
+        return;
+      }
+      const rowsHtml = state.sessions.map(s => {
+        const active = s.session_id === state.activeSession ? ' active' : '';
+        return `
+          <div class="row${active}" data-sid="${escape(s.session_id)}">
+            <div class="sid">${escape(s.session_id)}</div>
+            <div class="meta">${s.records} rec · ${fmt(s.last_ms)}</div>
+            <div class="counts">
+              ${s.permits ? '<span class="chip ok">'+s.permits+' permit</span>' : ''}
+              ${s.receipts ? '<span class="chip">'+s.receipts+' recpt</span>' : ''}
+              ${s.denials ? '<span class="chip deny">'+s.denials+' deny</span>' : ''}
+              ${s.approvals_requested ? '<span class="chip pending">'+s.approvals_requested+' apv</span>' : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+      const all = `<div class="row${state.activeSession === null ? ' active' : ''}" data-sid="">
+        <div class="sid">all sessions</div>
+        <div class="meta">combined timeline</div>
+      </div>`;
+      el.innerHTML = all + rowsHtml;
+      el.querySelectorAll('.row').forEach(r => {
+        r.addEventListener('click', () => {
+          const sid = r.getAttribute('data-sid');
+          state.activeSession = sid || null;
+          refresh();
+        });
+      });
+    }
+
+    function renderRecords() {
+      const tbody = document.getElementById('records-body');
+      if (!state.records.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">No records yet. Route an MCP tools/call through this proxy to see it appear here.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = state.records.map(r => {
+        const kind = r.kind || '';
+        const tool = r.tool_name || (r.kind === 'receipt' ? '(response)' : '');
+        let statusCell = '';
+        if (kind === 'receipt') {
+          statusCell = `<span class="status ${r.status}">${escape(r.status || '')}</span> · ${fmtDur(r.duration_ms)}`;
+        } else if (kind === 'denial') {
+          statusCell = `<span class="status error">${escape(r.rule_id || '')}</span> · ${escape(r.reason || '')}`;
+        } else if (kind === 'approval_resolved') {
+          statusCell = `<span class="status ${r.decision === 'approved' ? 'ok' : 'error'}">${escape(r.decision || '')}</span>`;
+        } else if (r.rule_id) {
+          statusCell = escape(r.rule_id);
+        }
+        const id = r.id || r.permit_id || '';
+        return `
+          <tr>
+            <td>${fmt(r.timestamp_ms)}</td>
+            <td><span class="kind ${kind}">${escape(kind)}</span></td>
+            <td class="tool">${escape(tool)}</td>
+            <td>${statusCell}</td>
+            <td class="hash" title="${escape(id)}">${escape(short(id, 8))}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function escape(s) {
+      return String(s || '').replace(/[&<>"']/g, c =>
+        ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    }
+
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>

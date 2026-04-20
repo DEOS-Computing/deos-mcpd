@@ -129,22 +129,41 @@ Three actions:
 - `deny` — block, synthesize a JSON-RPC `-32001` error back to the client, emit a **denial** record. Upstream never sees the call.
 - `require_approval` — hold the call, emit `approval_requested`, wait on the control API, then either forward or synthesize an error depending on the decision.
 
-### Approval control API
+### Dashboard + approval control API (v0.3.0)
 
-Every proxy instance exposes a small HTTP control server at `127.0.0.1:4005`
-(override with `--control host:port` or disable with `--control off`).
+The same process that runs the proxy also serves a local dashboard +
+JSON control API at `http://127.0.0.1:4005` (override with
+`--control host:port`, or disable with `--control off`).
+
+Open `http://127.0.0.1:4005/` in a browser to see:
+
+- session list (per-session permit / receipt / denial / approval counts)
+- live record timeline with kind chips and status/duration
+- pending approvals inbox — click Approve / Deny to release a held call
+
+No npm install. The dashboard is a single HTML page embedded directly
+into the Rust binary. It auto-refreshes every 2 seconds.
+
+Programmatic endpoints (same port):
 
 ```bash
-# list pending approvals
+# pending approvals awaiting decision
 curl -s http://127.0.0.1:4005/pending | jq .
 
-# approve / deny by pending id
+# session summaries
+curl -s http://127.0.0.1:4005/api/sessions | jq .
+
+# records (supports ?session=… and ?kind=…)
+curl -s 'http://127.0.0.1:4005/api/records?session=<id>&kind=denial' | jq .
+
+# decide a pending approval
 curl -X POST http://127.0.0.1:4005/approve/<id>
 curl -X POST http://127.0.0.1:4005/deny/<id>
 ```
 
 Timeouts are per-rule (`approval_timeout_s`, default 120). A timed-out
-approval emits a `denial` and synthesizes the same `-32001` error.
+approval emits a `denial` and synthesizes the same `-32001` error back
+to the MCP client.
 
 ## Status
 
@@ -152,11 +171,13 @@ approval emits a `denial` and synthesizes the same `-32001` error.
 - [x] permit / receipt / denial / approval records
 - [x] YAML policy DSL (`allow` / `deny` / `require_approval`)
 - [x] Approval control API (`GET /pending`, `POST /approve/:id`, `POST /deny/:id`)
+- [x] Local dashboard at `http://127.0.0.1:4005/` (single-file, zero deps)
+- [x] Read API: `GET /api/sessions`, `GET /api/records?session=&kind=&limit=`
 - [x] JSONL append-only log
 - [x] Session ID threading
-- [ ] HTTP + SSE transport (Week 3)
-- [ ] Hosted dashboard + team tier (Week 3)
-- [ ] Enterprise: DEOS kernel as receipt store + replay (Week 4+)
+- [ ] HTTP + SSE transport (Week 4)
+- [ ] Hosted receiver + team tier (Week 4)
+- [ ] Enterprise: DEOS kernel as receipt store + replay (Week 5+)
 
 ## Design notes
 
