@@ -17,6 +17,7 @@ pub enum Record {
         tool_name: String,
         args_hash: String,
         request_id: String,
+        rule_id: String,
         timestamp_ms: u64,
     },
     Receipt {
@@ -26,6 +27,34 @@ pub enum Record {
         status: String,
         result_hash: String,
         duration_ms: u64,
+        timestamp_ms: u64,
+    },
+    Denial {
+        id: String,
+        session_id: String,
+        upstream: String,
+        tool_name: String,
+        args_hash: String,
+        request_id: String,
+        rule_id: String,
+        reason: String,
+        timestamp_ms: u64,
+    },
+    ApprovalRequested {
+        id: String,
+        session_id: String,
+        upstream: String,
+        tool_name: String,
+        args_hash: String,
+        request_id: String,
+        rule_id: String,
+        timestamp_ms: u64,
+    },
+    ApprovalResolved {
+        id: String,
+        pending_id: String,
+        session_id: String,
+        decision: String,
         timestamp_ms: u64,
     },
 }
@@ -38,12 +67,17 @@ pub fn now_ms() -> u64 {
 }
 
 pub fn hash_value(v: &Value) -> String {
-    // Canonical-ish: serde_json::to_vec is stable for a given Value.
     let bytes = serde_json::to_vec(v).unwrap_or_default();
     blake3::hash(&bytes).to_hex().to_string()
 }
 
-pub fn permit_id(session_id: &str, tool_name: &str, args_hash: &str, request_id: &str, ts: u64) -> String {
+pub fn permit_id(
+    session_id: &str,
+    tool_name: &str,
+    args_hash: &str,
+    request_id: &str,
+    ts: u64,
+) -> String {
     let canon = serde_json::json!({
         "session_id": session_id,
         "tool_name": tool_name,
@@ -59,6 +93,55 @@ pub fn receipt_id(permit_id: &str, result_hash: &str, status: &str, ts: u64) -> 
         "permit_id": permit_id,
         "result_hash": result_hash,
         "status": status,
+        "timestamp_ms": ts,
+    });
+    hash_value(&canon)
+}
+
+pub fn denial_id(
+    session_id: &str,
+    tool_name: &str,
+    args_hash: &str,
+    request_id: &str,
+    rule_id: &str,
+    ts: u64,
+) -> String {
+    let canon = serde_json::json!({
+        "kind": "denial",
+        "session_id": session_id,
+        "tool_name": tool_name,
+        "args_hash": args_hash,
+        "request_id": request_id,
+        "rule_id": rule_id,
+        "timestamp_ms": ts,
+    });
+    hash_value(&canon)
+}
+
+pub fn pending_id(
+    session_id: &str,
+    tool_name: &str,
+    args_hash: &str,
+    request_id: &str,
+    rule_id: &str,
+    ts: u64,
+) -> String {
+    let canon = serde_json::json!({
+        "kind": "pending",
+        "session_id": session_id,
+        "tool_name": tool_name,
+        "args_hash": args_hash,
+        "request_id": request_id,
+        "rule_id": rule_id,
+        "timestamp_ms": ts,
+    });
+    hash_value(&canon)
+}
+
+pub fn resolution_id(pending_id: &str, decision: &str, ts: u64) -> String {
+    let canon = serde_json::json!({
+        "pending_id": pending_id,
+        "decision": decision,
         "timestamp_ms": ts,
     });
     hash_value(&canon)
@@ -106,7 +189,6 @@ pub fn request_id_string(id: &Value) -> String {
 }
 
 pub fn emit(tx: &mpsc::Sender<Record>, rec: Record) -> Result<()> {
-    // Use blocking try_send — receipts are not on the hot path.
     if let Err(e) = tx.try_send(rec) {
         eprintln!("[deos-mcpd] receipt channel full: {}", e);
     }

@@ -1,16 +1,24 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+mod approval;
+mod control;
 mod jsonrpc;
+mod policy;
 mod proxy;
 mod receipts;
+
+use approval::Approvals;
+use policy::Policy;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "deos-mcpd",
     version,
-    about = "Governance proxy for MCP servers — permits, receipts, audit trail."
+    about = "Governance proxy for MCP servers — permits, receipts, policy, approval."
 )]
 struct Args {
     /// Upstream MCP server command + args. Everything after `--upstream` is
@@ -33,6 +41,15 @@ struct Args {
     /// Override session ID. Defaults to a UUID v4 generated at startup.
     #[arg(long)]
     session_id: Option<String>,
+
+    /// Path to YAML policy file. If omitted, a default-allow policy is used.
+    #[arg(long)]
+    policy: Option<PathBuf>,
+
+    /// Bind address for the control HTTP API (used for approvals + dashboards).
+    /// Defaults to 127.0.0.1:4005. Pass "off" to disable.
+    #[arg(long, default_value = "127.0.0.1:4005")]
+    control: String,
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -47,19 +64,43 @@ async fn main() -> Result<()> {
         .session_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+    let policy = match args.policy {
+        Some(path) => Policy::load(&path)
+            .with_context(|| format!("failed to load policy from {:?}", path))?,
+        None => Policy::open_default(),
+    };
+    let policy = Arc::new(policy);
+
+    let approvals = Approvals::new();
+
+    if args.control.to_ascii_lowercase() != "off" {
+        let bind: SocketAddr = args
+            .control
+            .parse()
+            .with_context(|| format!("invalid --control address {:?}", args.control))?;
+        let approvals_clone = approvals.clone();
+        tokio::spawn(async move {
+            if let Err(e) = control::run(bind, approvals_clone).await {
+                eprintln!("[deos-mcpd] control server error: {}", e);
+            }
+        });
+    }
+
     let (cmd, cmd_args) = args
         .upstream
         .split_first()
         .context("--upstream requires at least one argument")?;
 
-    proxy::run(
-        cmd,
-        cmd_args,
+    let cfg = proxy::ProxyConfig {
+        cmd: cmd.to_string(),
+        args: cmd_args.to_vec(),
         receipts_path,
         session_id,
-        args.upstream.join(" "),
-    )
-    .await
+        upstream: args.upstream.join(" "),
+        policy,
+        approvals,
+    };
+    proxy::run(cfg).await
 }
 
 fn default_receipts_path() -> Result<PathBuf> {

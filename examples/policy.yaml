@@ -1,0 +1,54 @@
+# deos-mcpd policy example
+#
+# Rules are evaluated in order. First match wins. Falls through to `default`
+# if nothing matches.
+#
+# Actions:
+#   allow              — permit + forward, emit receipt
+#   deny               — block the call, synthesize JSON-RPC error, emit denial
+#   require_approval   — pause the call until a human hits POST /approve/<id>
+#                        (or POST /deny/<id>) on the control API, with timeout
+#
+# Matcher fields:
+#   tool        — tool name (exact) or regex if tool_regex: true
+#   args.<k>    — optional sub-matchers:
+#                   equals:          <value>
+#                   regex:           "<pattern>"
+#                   starts_with:     "<prefix>"
+#                   not_starts_with: "<prefix>"
+#                   contains:        "<substring>"
+
+version: 1
+default: allow
+
+rules:
+  # Block everything destructive on GitHub outright.
+  - id: block-github-destructive
+    description: "Never let an agent delete a repo or force-push"
+    tool: "delete_repository|force_push|delete_branch"
+    tool_regex: true
+    action: deny
+
+  # Require human approval for any write-side filesystem op.
+  - id: approve-fs-writes
+    description: "Pause on any write/edit/move/delete"
+    tool: "write_file|edit_file|move_file|create_directory"
+    tool_regex: true
+    action: require_approval
+    approval_timeout_s: 300
+
+  # Deny filesystem reads that escape the project directory.
+  - id: fs-reads-inside-project
+    tool: read_text_file
+    args:
+      path:
+        not_starts_with: "/Users/you/projects"
+    action: deny
+
+  # Require approval for any SQL that isn't a SELECT.
+  - id: approve-sql-mutations
+    tool: query
+    args:
+      sql:
+        regex: "^\\s*(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER)"
+    action: require_approval

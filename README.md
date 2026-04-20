@@ -89,16 +89,74 @@ tail -f ~/.deos-mcpd/receipts.jsonl | jq .
 {"kind":"receipt","id":"a177…","permit_id":"9f8c…","session_id":"d3a1…","status":"ok","result_hash":"b804…","duration_ms":4,"timestamp_ms":1713570102335}
 ```
 
+## Policy + approval (v0.2.0)
+
+Point the proxy at a YAML policy to go from *logger* to *governor*:
+
+```bash
+deos-mcpd --policy ./policy.yaml \
+  --upstream npx -y @modelcontextprotocol/server-github
+```
+
+Example `policy.yaml`:
+
+```yaml
+version: 1
+default: allow
+
+rules:
+  - id: block-github-destructive
+    tool: "delete_repository|force_push|delete_branch"
+    tool_regex: true
+    action: deny
+
+  - id: approve-fs-writes
+    tool: "write_file|edit_file|move_file|create_directory"
+    tool_regex: true
+    action: require_approval
+    approval_timeout_s: 300
+
+  - id: fs-reads-inside-project
+    tool: read_text_file
+    args:
+      path:
+        not_starts_with: "/Users/you/projects"
+    action: deny
+```
+
+Three actions:
+- `allow` — permit + forward + receipt (the v0.1 path)
+- `deny` — block, synthesize a JSON-RPC `-32001` error back to the client, emit a **denial** record. Upstream never sees the call.
+- `require_approval` — hold the call, emit `approval_requested`, wait on the control API, then either forward or synthesize an error depending on the decision.
+
+### Approval control API
+
+Every proxy instance exposes a small HTTP control server at `127.0.0.1:4005`
+(override with `--control host:port` or disable with `--control off`).
+
+```bash
+# list pending approvals
+curl -s http://127.0.0.1:4005/pending | jq .
+
+# approve / deny by pending id
+curl -X POST http://127.0.0.1:4005/approve/<id>
+curl -X POST http://127.0.0.1:4005/deny/<id>
+```
+
+Timeouts are per-rule (`approval_timeout_s`, default 120). A timed-out
+approval emits a `denial` and synthesizes the same `-32001` error.
+
 ## Status
 
 - [x] stdio transport
-- [x] permit / receipt emission for `tools/call`
+- [x] permit / receipt / denial / approval records
+- [x] YAML policy DSL (`allow` / `deny` / `require_approval`)
+- [x] Approval control API (`GET /pending`, `POST /approve/:id`, `POST /deny/:id`)
 - [x] JSONL append-only log
 - [x] Session ID threading
-- [ ] HTTP + SSE transport (Week 2)
-- [ ] Policy DSL: `tool: github.delete_repo → require_approval` (Week 2)
+- [ ] HTTP + SSE transport (Week 3)
 - [ ] Hosted dashboard + team tier (Week 3)
-- [ ] Enterprise: DEOS kernel as receipt store + replay (Week 4)
+- [ ] Enterprise: DEOS kernel as receipt store + replay (Week 4+)
 
 ## Design notes
 

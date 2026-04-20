@@ -1,6 +1,6 @@
 [package]
 name = "deos-mcpd"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Governance proxy for Model Context Protocol (MCP) servers — permits, receipts, audit trail."
 license = "MIT"
@@ -12,14 +12,18 @@ name = "deos-mcpd"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "process", "sync", "fs", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "process", "sync", "fs", "time", "net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 blake3 = "1"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 dirs = "5"
+regex = "1"
+axum = "0.7"
+tower = "0.5"
 
 [profile.release]
 lto = "thin"
