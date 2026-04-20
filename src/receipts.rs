@@ -147,9 +147,36 @@ pub fn resolution_id(pending_id: &str, decision: &str, ts: u64) -> String {
     hash_value(&canon)
 }
 
-pub fn spawn_writer(path: PathBuf) -> mpsc::Sender<Record> {
-    let (tx, mut rx) = mpsc::channel::<Record>(256);
-    tokio::spawn(async move {
+#[derive(Clone)]
+pub struct RemoteSink {
+    pub endpoint: String,
+    pub api_key: String,
+}
+
+pub struct WriterHandle {
+    pub tx: mpsc::Sender<Record>,
+    pub join: tokio::task::JoinHandle<()>,
+}
+
+pub fn spawn_writer(path: PathBuf, remote: Option<RemoteSink>) -> WriterHandle {
+    let (tx, mut rx) = mpsc::channel::<Record>(512);
+
+    // Optional upstream push: batch records, POST every 500ms or 50 records.
+    let push_setup = remote.as_ref().map(|_| {
+        let (push_tx, push_rx) = mpsc::channel::<Record>(512);
+        let remote_clone = remote.clone().unwrap();
+        let handle = tokio::spawn(async move {
+            run_remote_push(remote_clone, push_rx).await;
+        });
+        (push_tx, handle)
+    });
+
+    let join = tokio::spawn(async move {
+        let (remote_tx, push_handle) = match push_setup {
+            Some((tx, h)) => (Some(tx), Some(h)),
+            None => (None, None),
+        };
+
         let mut file = match OpenOptions::new()
             .create(true)
             .append(true)
@@ -163,6 +190,7 @@ pub fn spawn_writer(path: PathBuf) -> mpsc::Sender<Record> {
             }
         };
         while let Some(rec) = rx.recv().await {
+            // Local durability first — JSONL is authoritative.
             let mut line = match serde_json::to_vec(&rec) {
                 Ok(b) => b,
                 Err(e) => {
@@ -175,9 +203,105 @@ pub fn spawn_writer(path: PathBuf) -> mpsc::Sender<Record> {
                 eprintln!("[deos-mcpd] write error: {}", e);
             }
             let _ = file.flush().await;
+
+            // Then fan out to the remote sink. try_send — never block the hot
+            // path on a slow receiver; if the push channel is full we drop
+            // this push (the record is safe in the local JSONL).
+            if let Some(ref tx) = remote_tx {
+                if let Err(e) = tx.try_send(rec) {
+                    eprintln!("[deos-mcpd] remote push channel full: {}", e);
+                }
+            }
+        }
+
+        // Graceful shutdown: close the push channel and await the push task's
+        // final flush before this writer task returns. Without this, the
+        // tokio runtime may cancel the push task mid-HTTP-request.
+        drop(remote_tx);
+        if let Some(handle) = push_handle {
+            let _ = handle.await;
         }
     });
-    tx
+    WriterHandle { tx, join }
+}
+
+async fn run_remote_push(sink: RemoteSink, mut rx: mpsc::Receiver<Record>) {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("reqwest client");
+    let url = format!("{}/v1/receipts", sink.endpoint.trim_end_matches('/'));
+
+    let flush_interval = std::time::Duration::from_millis(500);
+    let max_batch = 50usize;
+    let mut batch: Vec<Record> = Vec::with_capacity(max_batch);
+    let mut ticker = tokio::time::interval(flush_interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        tokio::select! {
+            maybe_rec = rx.recv() => {
+                match maybe_rec {
+                    Some(rec) => {
+                        batch.push(rec);
+                        if batch.len() >= max_batch {
+                            flush_batch(&client, &url, &sink.api_key, &mut batch).await;
+                        }
+                    }
+                    None => {
+                        // Channel closed — flush remaining then exit.
+                        if !batch.is_empty() {
+                            flush_batch(&client, &url, &sink.api_key, &mut batch).await;
+                        }
+                        break;
+                    }
+                }
+            }
+            _ = ticker.tick() => {
+                if !batch.is_empty() {
+                    flush_batch(&client, &url, &sink.api_key, &mut batch).await;
+                }
+            }
+        }
+    }
+}
+
+async fn flush_batch(
+    client: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    batch: &mut Vec<Record>,
+) {
+    let payload = serde_json::json!({ "records": batch });
+    let res = client
+        .post(url)
+        .bearer_auth(api_key)
+        .json(&payload)
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => {
+            batch.clear();
+        }
+        Ok(r) => {
+            eprintln!(
+                "[deos-mcpd] remote push {} — {}",
+                r.status(),
+                r.text().await.unwrap_or_default()
+            );
+            // Keep the batch; try again next tick. Bound by channel backpressure.
+            if batch.len() > 500 {
+                eprintln!("[deos-mcpd] dropping {} records — remote backlog too large", batch.len());
+                batch.clear();
+            }
+        }
+        Err(e) => {
+            eprintln!("[deos-mcpd] remote push error: {}", e);
+            if batch.len() > 500 {
+                batch.clear();
+            }
+        }
+    }
 }
 
 pub fn request_id_string(id: &Value) -> String {

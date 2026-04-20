@@ -32,10 +32,13 @@ pub struct ProxyConfig {
     pub upstream: String,
     pub policy: Arc<Policy>,
     pub approvals: Arc<Approvals>,
+    pub remote: Option<crate::receipts::RemoteSink>,
 }
 
 pub async fn run(cfg: ProxyConfig) -> Result<()> {
-    let writer = receipts::spawn_writer(cfg.receipts_path);
+    let writer_handle = receipts::spawn_writer(cfg.receipts_path, cfg.remote.clone());
+    let writer = writer_handle.tx;
+    let writer_join = writer_handle.join;
 
     let mut child = Command::new(&cfg.cmd)
         .args(&cfg.args)
@@ -441,7 +444,11 @@ pub async fn run(cfg: ProxyConfig) -> Result<()> {
     drop(client_tx);
     let _ = tokio::join!(client_writer, upstream_writer);
     // Drop the writer sender so the receipts writer task flushes + exits.
+    // Then await the writer task so its final HTTP push to the remote
+    // receiver completes before we return (otherwise the tokio runtime
+    // shutdown can cancel an in-flight reqwest mid-POST).
     drop(writer);
+    let _ = writer_join.await;
     let status = child.wait().await?;
     if !status.success() {
         eprintln!("[deos-mcpd] upstream exited: {:?}", status);

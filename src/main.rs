@@ -50,6 +50,17 @@ struct Args {
     /// Defaults to 127.0.0.1:4005. Pass "off" to disable.
     #[arg(long, default_value = "127.0.0.1:4005")]
     control: String,
+
+    /// Optional hosted receiver endpoint. When set, every record is both
+    /// appended to the local JSONL and pushed (batched) to this receiver.
+    /// Example: --endpoint https://mcpd.deos-computing.com
+    #[arg(long, env = "DEOS_MCPD_ENDPOINT")]
+    endpoint: Option<String>,
+
+    /// API key for the hosted receiver. Required when --endpoint is set.
+    /// Prefer DEOS_MCPD_API_KEY env var so the key never appears in ps output.
+    #[arg(long, env = "DEOS_MCPD_API_KEY")]
+    api_key: Option<String>,
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -103,6 +114,19 @@ async fn main() -> Result<()> {
         .split_first()
         .context("--upstream requires at least one argument")?;
 
+    let remote = match (args.endpoint, args.api_key) {
+        (Some(endpoint), Some(api_key)) => Some(crate::receipts::RemoteSink {
+            endpoint,
+            api_key,
+        }),
+        (Some(_), None) => {
+            return Err(anyhow::anyhow!(
+                "--endpoint requires --api-key (or DEOS_MCPD_API_KEY env)"
+            ));
+        }
+        (None, _) => None,
+    };
+
     let cfg = proxy::ProxyConfig {
         cmd: cmd.to_string(),
         args: cmd_args.to_vec(),
@@ -111,6 +135,7 @@ async fn main() -> Result<()> {
         upstream: args.upstream.join(" "),
         policy,
         approvals,
+        remote,
     };
     proxy::run(cfg).await
 }
