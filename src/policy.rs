@@ -12,30 +12,57 @@ pub enum Action {
     RequireApproval,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArgMatch {
-    Equals(Value),
-    Regex(String),
-    StartsWith(String),
-    NotStartsWith(String),
-    Contains(String),
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArgMatch {
+    #[serde(default)]
+    pub equals: Option<Value>,
+    #[serde(default)]
+    pub regex: Option<String>,
+    #[serde(default)]
+    pub starts_with: Option<String>,
+    #[serde(default)]
+    pub not_starts_with: Option<String>,
+    #[serde(default)]
+    pub contains: Option<String>,
 }
 
 impl ArgMatch {
     pub fn matches(&self, v: &Value) -> bool {
-        match self {
-            ArgMatch::Equals(expected) => v == expected,
-            ArgMatch::Regex(pat) => match v.as_str() {
-                Some(s) => Regex::new(pat).map(|r| r.is_match(s)).unwrap_or(false),
-                None => false,
-            },
-            ArgMatch::StartsWith(pfx) => v.as_str().map(|s| s.starts_with(pfx)).unwrap_or(false),
-            ArgMatch::NotStartsWith(pfx) => v.as_str().map(|s| !s.starts_with(pfx)).unwrap_or(true),
-            ArgMatch::Contains(needle) => {
-                v.as_str().map(|s| s.contains(needle)).unwrap_or(false)
+        if let Some(expected) = &self.equals {
+            if v != expected {
+                return false;
             }
         }
+        if let Some(pat) = &self.regex {
+            let s = match v.as_str() {
+                Some(s) => s,
+                None => return false,
+            };
+            if !Regex::new(pat).map(|r| r.is_match(s)).unwrap_or(false) {
+                return false;
+            }
+        }
+        if let Some(pfx) = &self.starts_with {
+            match v.as_str() {
+                Some(s) if s.starts_with(pfx) => {}
+                _ => return false,
+            }
+        }
+        if let Some(pfx) = &self.not_starts_with {
+            if let Some(s) = v.as_str() {
+                if s.starts_with(pfx) {
+                    return false;
+                }
+            }
+        }
+        if let Some(needle) = &self.contains {
+            match v.as_str() {
+                Some(s) if s.contains(needle) => {}
+                _ => return false,
+            }
+        }
+        true
     }
 }
 
