@@ -1,0 +1,31 @@
+{
+  "_comment": "Before: direct upstream MCP server",
+  "mcpServers_before": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/Documents"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..." }
+    }
+  },
+
+  "_comment_after": "After: deos-mcpd wraps each server. Every tools/call gets a permit + receipt in ~/.deos-mcpd/receipts.jsonl.",
+  "mcpServers": {
+    "filesystem": {
+      "command": "deos-mcpd",
+      "args": [
+        "--upstream", "npx", "-y", "@modelcontextprotocol/server-filesystem", "/Users/you/Documents"
+      ]
+    },
+    "github": {
+      "command": "deos-mcpd",
+      "args": [
+        "--upstream", "npx", "-y", "@modelcontextprotocol/server-github"
+      ],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..." }
+    }
+  }
+}
