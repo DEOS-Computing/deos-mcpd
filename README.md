@@ -8,6 +8,24 @@ upstream MCP server. One-line swap in your Claude Desktop / Claude Code config.
 
 Part of the [DEOS](https://github.com/DEOS-Computing) governance stack.
 
+## Demo
+
+Wrap the filesystem MCP server, make a tool call, watch the audit trail emerge:
+
+```
+$ deos-mcpd --upstream npx -y @modelcontextprotocol/server-filesystem /tmp/demo &
+$ # … Claude makes a tools/call for read_text_file …
+$ tail -f ~/.deos-mcpd/receipts.jsonl | jq -c .
+
+{"kind":"permit","id":"f350ca4d…","session_id":"d3a1…","tool_name":"read_text_file","args_hash":"db04c382…","request_id":"3","timestamp_ms":1776658150176}
+{"kind":"receipt","id":"c6d67506…","permit_id":"f350ca4d…","status":"ok","result_hash":"654ee2a8…","duration_ms":916}
+```
+
+The permit is emitted **before** the call hits the upstream server. The receipt
+is emitted **after** the response comes back. Both are content-addressed; the
+receipt's `permit_id` is the permit's BLAKE3 id. The upstream server sees a
+byte-identical JSON-RPC stream — no behavioral change to the tool itself.
+
 ## Why
 
 MCP is great at connecting Claude to tools. It is silent about who authorized
